@@ -2,12 +2,12 @@ from pathlib import Path
 
 import numpy as np
 import streamlit as st
-import tensorflow as tf
 from PIL import Image, UnidentifiedImageError
 
 
 MODEL_FILENAME = "67102010164_mnist_model.keras"
 MODEL_PATH = Path(__file__).resolve().parent / MODEL_FILENAME
+WEIGHTS_PATH = Path(__file__).resolve().parent / "model_weights.npz"
 CLASS_NAMES = [str(digit) for digit in range(10)]
 
 
@@ -30,9 +30,18 @@ st.markdown(
 
 
 @st.cache_resource(show_spinner=False)
-def load_model(model_path: str) -> tf.keras.Model:
-    """Load the trained Keras model once per Streamlit process."""
-    return tf.keras.models.load_model(model_path)
+def load_weights(weights_path: str) -> dict[str, np.ndarray]:
+    """Load the exported dense-layer weights without requiring TensorFlow."""
+    with np.load(weights_path) as data:
+        return {key: data[key] for key in ("w0", "b0", "w1", "b1")}
+
+
+def predict(batch: np.ndarray, weights: dict[str, np.ndarray]) -> np.ndarray:
+    hidden = np.maximum(0.0, batch.reshape(len(batch), -1) @ weights["w0"] + weights["b0"])
+    logits = hidden @ weights["w1"] + weights["b1"]
+    logits -= logits.max(axis=1, keepdims=True)
+    probabilities = np.exp(logits)
+    return probabilities / probabilities.sum(axis=1, keepdims=True)
 
 
 def preprocess_image(image: Image.Image, invert: bool = False) -> tuple[np.ndarray, Image.Image]:
@@ -85,15 +94,14 @@ with preview_column:
     )
 
 with result_column:
-    if not MODEL_PATH.is_file():
-        st.error(f"Model file not found: {MODEL_FILENAME}")
+    if not WEIGHTS_PATH.is_file():
+        st.error("Exported model weights are missing: model_weights.npz")
         st.caption("Place the trained model in the same folder as app.py, then reload the app.")
         st.stop()
 
     try:
         with st.spinner("Recognizing the digit…"):
-            model = load_model(str(MODEL_PATH))
-            probabilities = np.asarray(model.predict(input_batch, verbose=0)).squeeze()
+            probabilities = predict(input_batch, load_weights(str(WEIGHTS_PATH))).squeeze()
     except Exception as exc:
         st.error("The model could not be loaded or used for prediction.")
         st.caption(f"Model error: {exc}")
